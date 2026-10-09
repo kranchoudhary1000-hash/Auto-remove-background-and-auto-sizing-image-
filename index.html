@@ -9,8 +9,6 @@
   <script src="https://unpkg.com/lucide@latest"></script>
   <!-- jsPDF for PDF export -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <!-- Background Removal (client-side, 100% private, no server) -->
-  <script src="https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.4.5/dist/browser/index.js"></script>
 
   <link rel="stylesheet" href="style.css">
 </head>
@@ -78,9 +76,9 @@
           </div>
           <div class="flex items-center gap-2 flex-wrap">
             <div class="stepper">
-              <button id="qtyMinus" aria-label="Decrease quantity"><i data-lucide="minus"></i></button>
+              <button id="qtyMinus" aria-label="Decrease"><i data-lucide="minus"></i></button>
               <input type="number" id="quantityInput" value="12" min="1" max="200" step="1">
-              <button id="qtyPlus" aria-label="Increase quantity"><i data-lucide="plus"></i></button>
+              <button id="qtyPlus" aria-label="Increase"><i data-lucide="plus"></i></button>
             </div>
             <span class="text-sm" style="margin-left: auto;">Total photos: <strong id="totalPhotosDisplay">12</strong></span>
           </div>
@@ -210,4 +208,4 @@
 
   <script src="script.js"></script>
 </body>
-  </html>
+</html>
