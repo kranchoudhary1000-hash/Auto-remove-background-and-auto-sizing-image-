@@ -7,7 +7,7 @@
   const state = {
     image: null,               // current image (may be BG-removed)
     originalImage: null,       // original uploaded image
-    bgRemoved: false,          // flag
+    bgRemoved: false,
     imageLoaded: false,
     quantity: 12,
     photoWidthMm: 35,
@@ -19,10 +19,11 @@
     paperHeightMm: 297,
     marginMm: 10,
     orientation: 'portrait',
-    rows: 0,                   // 0 = auto
-    cols: 0,                   // 0 = auto
+    rows: 0,
+    cols: 0,
     totalPages: 1,
     isDark: false,
+    bgLib: null,               // cached background removal function
   };
 
   // ============================================================
@@ -86,7 +87,6 @@
   // EVENT LISTENERS
   // ============================================================
   function setupEventListeners() {
-    // Upload
     uploadZone.addEventListener('click', () => fileInput.click());
     uploadZone.addEventListener('dragover', (e) => {
       e.preventDefault();
@@ -108,7 +108,6 @@
     bgRemoveBtn.addEventListener('click', removeBackground);
     bgRestoreBtn.addEventListener('click', restoreOriginal);
 
-    // Quantity
     qtyMinus.addEventListener('click', () => updateQuantity(state.quantity - 1));
     qtyPlus.addEventListener('click', () => updateQuantity(state.quantity + 1));
     quantityInput.addEventListener('change', (e) => {
@@ -118,14 +117,12 @@
     });
     quantityPresets.querySelectorAll('.preset-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        const qty = parseInt(btn.dataset.qty);
-        updateQuantity(qty);
+        updateQuantity(parseInt(btn.dataset.qty));
         quantityPresets.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
       });
     });
 
-    // Photo size presets
     document.querySelectorAll('.size-preset-btn[data-size]').forEach(btn => {
       btn.addEventListener('click', () => {
         const size = btn.dataset.size;
@@ -138,7 +135,6 @@
       });
     });
 
-    // Paper presets
     document.querySelectorAll('.size-preset-btn[data-paper]').forEach(btn => {
       btn.addEventListener('click', () => {
         const paper = btn.dataset.paper;
@@ -151,24 +147,20 @@
       });
     });
 
-    // Numeric inputs
     [photoWidthMm, photoHeightMm, gapMm, borderWidth, paperWidthMm, paperHeightMm, marginMm, rowsInput, colsInput].forEach(input => {
       input.addEventListener('input', updateStateFromInputs);
     });
     borderColor.addEventListener('input', updateStateFromInputs);
     orientation.addEventListener('change', updateStateFromInputs);
 
-    // Theme
     themeToggle.addEventListener('click', toggleDarkMode);
 
-    // Download & Print
     downloadPngBtn.addEventListener('click', () => downloadImage('png'));
     downloadJpegBtn.addEventListener('click', () => downloadImage('jpeg'));
     downloadPdfBtn.addEventListener('click', downloadPDF);
     printBtn.addEventListener('click', printSheet);
     resetBtn.addEventListener('click', resetAll);
 
-    // Resize (debounced)
     let resizeTimer;
     window.addEventListener('resize', () => {
       clearTimeout(resizeTimer);
@@ -230,8 +222,37 @@
   }
 
   // ============================================================
-  // BACKGROUND REMOVAL (100% client-side)
+  // BACKGROUND REMOVAL — reliable dynamic import from CDN
   // ============================================================
+  async function loadBgRemovalLibrary() {
+    if (state.bgLib) return state.bgLib;
+
+    // Multiple CDN attempts, in case one fails
+    const urls = [
+      'https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.4.5/dist/index.mjs',
+      'https://esm.sh/@imgly/background-removal@1.4.5',
+      'https://unpkg.com/@imgly/background-removal@1.4.5/dist/index.mjs'
+    ];
+
+    let lastErr = null;
+    for (const url of urls) {
+      try {
+        console.log('Trying to load BG removal from:', url);
+        const mod = await import(/* @vite-ignore */ url);
+        const fn = mod.default || mod.removeBackground || mod.imglyRemoveBackground;
+        if (typeof fn === 'function') {
+          console.log('✅ Loaded BG removal from:', url);
+          state.bgLib = fn;
+          return fn;
+        }
+      } catch (err) {
+        console.warn('Failed loading from', url, err);
+        lastErr = err;
+      }
+    }
+    throw lastErr || new Error('Could not load background removal library');
+  }
+
   async function removeBackground() {
     if (!state.imageLoaded || !state.originalImage) {
       showToast('Please upload a photo first.', 'error');
@@ -242,25 +263,17 @@
       return;
     }
 
-    // Find the function exported by @imgly/background-removal
-    const removeBgFn =
-      window.imglyRemoveBackground ||
-      (window.imgly && window.imgly.removeBackground) ||
-      (window.removeBackground && window.removeBackground);
-
-    if (typeof removeBgFn !== 'function') {
-      showToast('Background library not loaded. Check your internet and refresh.', 'error');
-      console.error('Available keys on window:', Object.keys(window).filter(k => /bg|imgly|remove/i.test(k)));
-      return;
-    }
-
     bgRemoveBtn.disabled = true;
     bgRemoveBtn.style.opacity = '0.6';
-    bgStatus.textContent = '⏳ Loading AI model… (first time ~15-30s)';
+    bgStatus.textContent = '⏳ Loading AI library…';
     showLoading(true);
 
     try {
-      // Convert current original image to Blob
+      const removeBgFn = await loadBgRemovalLibrary();
+
+      bgStatus.textContent = '⏳ Preparing image…';
+
+      // Convert original image to Blob
       const sourceBlob = await new Promise((resolve) => {
         const c = document.createElement('canvas');
         c.width = state.originalImage.width;
@@ -269,7 +282,7 @@
         c.toBlob(resolve, 'image/png', 1.0);
       });
 
-      bgStatus.textContent = '🧠 AI is processing your photo…';
+      bgStatus.textContent = '🧠 AI is removing background… (first time ~20-40s)';
 
       const resultBlob = await removeBgFn(sourceBlob, {
         progress: (key, current, total) => {
@@ -292,7 +305,7 @@
       uploadedImage.src = url;
       renderPreview();
 
-      bgStatus.textContent = '✅ Background removed! White paper will show behind.';
+      bgStatus.textContent = '✅ Background removed!';
       showToast('Background removed successfully!', 'success');
 
       bgRemoveBtn.classList.add('hidden');
@@ -364,9 +377,7 @@
   function computeLayout() {
     let paperW = state.paperWidthMm;
     let paperH = state.paperHeightMm;
-    if (state.orientation === 'landscape') {
-      [paperW, paperH] = [paperH, paperW];
-    }
+    if (state.orientation === 'landscape') [paperW, paperH] = [paperH, paperW];
 
     const margin = state.marginMm;
     const photoW = state.photoWidthMm;
@@ -424,11 +435,9 @@
     sheetCanvas.width = canvasW;
     sheetCanvas.height = canvasH;
 
-    // White paper
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, canvasW, canvasH);
 
-    // Thin page outline
     ctx.strokeStyle = '#e0e0e0';
     ctx.lineWidth = 1;
     ctx.strokeRect(0.5, 0.5, canvasW - 1, canvasH - 1);
@@ -442,12 +451,10 @@
       return;
     }
 
-    // Center the grid
     const totalGridW = cols * photoW + (cols - 1) * gap;
     const totalGridH = rows * photoH + (rows - 1) * gap;
     const offsetX = (paperW - totalGridW) / 2;
     const offsetY = (paperH - totalGridH) / 2;
-
     const startIndex = (pageNum - 1) * perPage;
 
     for (let r = 0; r < rows; r++) {
@@ -460,20 +467,16 @@
         const w = photoW * scale;
         const h = photoH * scale;
 
-        // Border
         if (state.borderWidth > 0) {
           ctx.strokeStyle = state.borderColor;
           ctx.lineWidth = Math.max(0.5, state.borderWidth * scale);
           ctx.strokeRect(x, y, w, h);
         }
-
-        // Photo (with cover fit)
         drawImageCover(ctx, state.image, x, y, w, h);
       }
       if (startIndex + (r + 1) * cols >= state.quantity) break;
     }
 
-    // Page number
     if (layout.totalPages > 1) {
       ctx.fillStyle = '#94a3b8';
       ctx.font = `${Math.max(9, Math.round(12 * scale))}px Inter, sans-serif`;
@@ -483,7 +486,6 @@
     }
   }
 
-  // Draw image with "cover" fit (crop, no stretch), with white background for transparency
   function drawImageCover(targetCtx, img, x, y, w, h) {
     const imgAspect = img.width / img.height;
     const targetAspect = w / h;
@@ -499,7 +501,6 @@
       sx = 0;
       sy = (img.height - sh) / 2;
     }
-    // Fill white behind (handles transparent PNGs from BG removal)
     targetCtx.save();
     targetCtx.fillStyle = '#ffffff';
     targetCtx.fillRect(x, y, w, h);
@@ -519,7 +520,7 @@
     setTimeout(() => {
       try {
         const layout = computeLayout();
-        const pxPerMm = 300 / 25.4; // 300 DPI
+        const pxPerMm = 300 / 25.4;
         const exportScale = pxPerMm;
         const pageNum = 1;
         const { paperW, paperH, photoW, photoH, gap, rows, cols, perPage } = layout;
@@ -616,11 +617,8 @@
         const imgData = getImageDataURL();
 
         for (let page = 1; page <= totalPages; page++) {
-          if (page > 1) {
-            doc.addPage([paperW, paperH], paperW > paperH ? 'landscape' : 'portrait');
-          }
+          if (page > 1) doc.addPage([paperW, paperH], paperW > paperH ? 'landscape' : 'portrait');
 
-          // White background
           doc.setFillColor(255, 255, 255);
           doc.rect(0, 0, paperW, paperH, 'F');
 
@@ -641,11 +639,10 @@
               if (state.borderWidth > 0) {
                 const rgb = hexToRgb(state.borderColor);
                 doc.setDrawColor(rgb.r, rgb.g, rgb.b);
-                doc.setLineWidth(state.borderWidth * 0.264583); // px → mm
+                doc.setLineWidth(state.borderWidth * 0.264583);
                 doc.rect(x, y, photoW, photoH);
               }
 
-              // cover crop
               const imgProps = getCoverCrop(state.image, photoW, photoH);
               doc.addImage(
                 imgData, 'JPEG',
@@ -675,7 +672,6 @@
     }, 50);
   }
 
-  // Get image data URL with white background (for transparent PNGs after BG removal)
   function getImageDataURL() {
     const canvas = document.createElement('canvas');
     canvas.width = state.image.width;
